@@ -1,10 +1,9 @@
 import os
 import asyncio
-import time
 from pyrogram import Client, filters
-from terabox_utils import upload_to_terabox, get_share_link
+from terabox_utils import upload_via_browser
 
-# Railway Variables
+# CONFIG
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
@@ -18,31 +17,28 @@ async def worker():
     while True:
         msg, video_index = await upload_queue.get()
         local_file = None
-        status = await app.send_message(DUMP_CHANNEL, f"Processing Video {video_index}...")
-        
+        status = await app.send_message(DUMP_CHANNEL, f"🛠 **Starting Task {video_index}**")
+
         try:
-            # 1. Download
+            # Download from TG
             await status.edit(f"📥 Downloading Video {video_index}...")
             local_file = await msg.download()
             
-            # 2. Upload
-            await status.edit(f"📤 Uploading Video {video_index} to TeraBox...")
-            fs_id = upload_to_terabox(local_file, NDUS)
+            # Upload via Browser
+            await status.edit(f"🌐 [Browser] Uploading Video {video_index}...")
+            share_url = await upload_via_browser(local_file, NDUS)
             
-            if fs_id:
-                # 3. Share
-                link = get_share_link(NDUS, fs_id)
-                await status.edit(f"✅ **Video {video_index} Done!**\n🔗 {link}")
+            if share_url:
+                await status.edit(f"✅ **Video {video_index} Uploaded!**\n📂 Check your TeraBox Root folder.")
             else:
-                await status.edit(f"❌ TeraBox rejected upload for Video {video_index}. Check logs.")
-                
+                await status.edit(f"❌ Browser Upload Failed for Video {video_index}.")
+
         except Exception as e:
             await status.edit(f"⚠️ Error: {str(e)}")
         finally:
             if local_file and os.path.exists(local_file):
                 os.remove(local_file)
             upload_queue.task_done()
-            await asyncio.sleep(2)
 
 @app.on_message(filters.command("bulk", prefixes=".") & filters.me)
 async def bulk_upload(client, message):
@@ -54,26 +50,23 @@ async def bulk_upload(client, message):
     end_id = int(args[2].split('/')[-1])
     
     await message.edit("🔍 Scanning...")
-    
     count = 0
     for m_id in range(start_id, end_id + 1):
-        try:
-            m = await client.get_messages(message.chat.id, m_id)
-            if m.video or m.document:
-                count += 1
-                await upload_queue.put((m, count))
-        except: continue
-        
-    await message.edit(f"✅ Queued {count} videos.")
+        m = await client.get_messages(message.chat.id, m_id)
+        if m and (m.video or m.document):
+            count += 1
+            await upload_queue.put((m, count))
+            
+    await message.edit(f"✅ Queued {count} items.")
 
 async def main():
     async with app:
-        # FIX: Resolve the Peer ID at startup
+        # Peer resolution
         try:
             await app.get_chat(DUMP_CHANNEL)
-            print("Successfully linked to Dump Channel!")
-        except Exception as e:
-            print(f"Peer Resolution Error: {e}")
+            print("Bot is online and Linked!")
+        except:
+            print("Warning: Could not resolve Dump Channel ID.")
             
         asyncio.create_task(worker())
         await asyncio.Event().wait()
